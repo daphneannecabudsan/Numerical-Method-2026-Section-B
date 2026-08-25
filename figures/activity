@@ -1,0 +1,85 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+ 
+# ==========================================
+# 1. GENERATE DATA (USING A DIFFERENT METHOD)
+# ==========================================
+# INSTEAD of pd.date_range, we will generate 288 steps (24 hours * 12 steps per hour for 5 mins)
+# This completely avoids the '5T' error
+num_steps = 24 * 12  # 288 steps for a 24-hour period with 5-minute intervals
+time_range = pd.date_range(start='2026-01-01 00:00', periods=num_steps, freq='5min')
+ 
+# Create a fake 'hump'
+x = np.linspace(-3, 3, len(time_range))
+stage = (20 / (1 + np.exp(-x))) + 14  # Sigmoid curve
+stage += np.random.normal(0, 0.05, len(time_range))
+ 
+df = pd.DataFrame({'Time': time_range, 'Stage': stage})
+ 
+# ==========================================
+# 2. CALCULATE FINITE DIFFERENCES
+# ==========================================
+df['d1f'] = df['Stage'].diff()
+df['d1b'] = df['Stage'].diff().shift(-1)
+df['d1c'] = df['Stage'].diff(periods=2) / 2
+ 
+df['d2f'] = df['d1f'].diff()
+df['d2b'] = df['d1b'].diff().shift(-1)
+df['d2c'] = df['d1c'].diff(periods=2) / 2
+ 
+df.dropna(inplace=True)
+ 
+# ==========================================
+# 3. PLOTTING
+# ==========================================
+print("Generating plots...")
+ 
+fig, axes = plt.subplots(nrows=7, ncols=1, figsize=(12, 18))
+fig.suptitle('Depth Time Series Analysis with Finite Differences', fontsize=16, fontweight='bold')
+ 
+# Graph 1
+axes[0].plot(df['Time'], df['Stage'])
+axes[0].set_title('Graph 1 - Original Time Series: Reservoir Stage')
+axes[0].set_ylabel('Depth (m)')
+ 
+# Graph 2
+axes[1].plot(df['Time'], df['d1f'])
+axes[1].set_title('Graph 2 - Forward Difference (d1f)')
+axes[1].set_ylabel('Rate of Change')
+ 
+# Graph 3
+axes[2].plot(df['Time'], df['d1b'])
+axes[2].set_title('Graph 3 - Backward Difference (d1b)')
+axes[2].set_ylabel('Rate of Change')
+ 
+# Graph 4
+axes[3].plot(df['Time'], df['d1c'])
+axes[3].set_title('Graph 4 - Centered Difference (d1c)')
+axes[3].set_ylabel('Rate of Change')
+ 
+# Graph 5
+axes[4].plot(df['Time'], df['d2f'])
+axes[4].set_title('Graph 5 - Forward Difference (d2f)')
+axes[4].set_ylabel('Acceleration')
+ 
+# Graph 6
+axes[5].plot(df['Time'], df['d2b'])
+axes[5].set_title('Graph 6 - Backward Difference (d2b)')
+axes[5].set_ylabel('Acceleration')
+ 
+# Graph 7
+axes[6].plot(df['Time'], df['d2c'])
+axes[6].set_title('Graph 7 - Centered Difference (d2c)')
+axes[6].set_ylabel('Acceleration')
+axes[6].set_xlabel('Time')
+ 
+# Rotate dates
+plt.xticks(rotation=45)
+ 
+# Adjust layout
+plt.tight_layout()
+ 
+print("Displaying plot...")
+plt.show()
+print("Done.")

@@ -1,0 +1,84 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+ 
+# ==========================================
+# 1. CONNECT TO YOUR EXCEL FILE
+# ==========================================
+file_name = r'C:\Users\Mhelanie\Downloads\activities.xlsx'
+ 
+print("Reading Excel file...")
+ 
+# Read 'Nodes' tab. We do NOT skip rows because the headers are on row 1.
+df_nodes = pd.read_excel(file_name, sheet_name='Nodes')
+ 
+# Read 'Members' tab. We do NOT skip rows because the headers are on row 1.
+df_members = pd.read_excel(file_name, sheet_name='Members')
+ 
+print("✅ Successfully loaded data!")
+ 
+# ==========================================
+# 2. CONVERT NODE DATA FOR EASY LOOKUP
+# ==========================================
+node_coords = {}
+for index, row in df_nodes.iterrows():
+    # Note: We are now looking for 'Node', not 'Node Label'
+    label = str(row['Node']).strip()
+    node_coords[label] = {
+        'X': row['X (m)'],
+        'Y': row['Y (m)'],
+        'Z': row['Z (m)']
+    }
+ 
+# ==========================================
+# 3. PLOT THE 3D CUBE
+# ==========================================
+fig = plt.figure(figsize=(12, 9))
+ax = fig.add_subplot(111, projection='3d')
+ 
+# ---- Plot the Nodes ----
+# We must convert the Node numbers to strings to match the dictionary keys
+labels = ['0', '1', '2', '3', '4', '5', '6', '7']
+x_vals = [node_coords[n]['X'] for n in labels]
+y_vals = [node_coords[n]['Y'] for n in labels]
+z_vals = [node_coords[n]['Z'] for n in labels]
+ 
+ax.scatter(x_vals, z_vals, y_vals, color='#d62728', s=100, label='Nodes', zorder=10)
+ 
+for label, coords in node_coords.items():
+    ax.text(coords['X'] + 0.2, coords['Z'] + 0.2, coords['Y'],
+            label, color='black', fontsize=11, fontweight='bold')
+ 
+# ---- Plot the Members ----
+for index, row in df_members.iterrows():
+    # Note: We are looking for 'i (start)' and 'j (end)', and converting them to strings
+    start_label = str(row['i (start)']).strip()
+    end_label = str(row['j (end)']).strip()
+    
+    if start_label not in node_coords or end_label not in node_coords:
+        continue
+        
+    x1, y1, z1 = node_coords[start_label]['X'], node_coords[start_label]['Y'], node_coords[start_label]['Z']
+    x2, y2, z2 = node_coords[end_label]['X'], node_coords[end_label]['Y'], node_coords[end_label]['Z']
+    
+    ax.plot([x1, x2], [z1, z2], [y1, y2], color='#1f4e79', linewidth=2.5, zorder=5)
+    
+    mid_x, mid_y, mid_z = (x1+x2)/2, (y1+y2)/2, (z1+z2)/2
+    ax.text(mid_x, mid_z, mid_y, f"M{row['Member']}", color='#1f4e79',
+            fontsize=9, ha='center', fontweight='bold')
+ 
+# ==========================================
+# 4. FORMAT THE PLOT
+# ==========================================
+ax.set_xlabel('X (m) - Lateral')
+ax.set_ylabel('Z (m) - Lateral')
+ax.set_zlabel('Y (m) - Vertical')
+ax.set_title('6m x 6m Cube Structure\n(Nodes 0-7, Members M0-M11)', fontsize=14)
+ax.set_xlim([-1, 7])
+ax.set_ylim([-1, 7])
+ax.set_zlim([-1, 7])
+ax.legend(loc='upper left')
+ 
+plt.tight_layout()
+print("✅ Done! Displaying plot...")
+plt.show()
