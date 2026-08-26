@@ -1,0 +1,701 @@
+# ============================================================
+# CUBE STRUCTURAL SOLVER — Rev. 2
+# 6m x 6m x 6m Cube | Direct Stiffness Method (3D Frame)
+# ============================================================
+# Rev. 2 Changes:
+#   - New color scheme per spec (blue cols, green beams, orange ground)
+#   - Improved pin supports (red triangles + hatching)
+#   - Red-outlined hollow circles for MZ releases
+#   - Local axes arrows on each member
+#   - DOF labels at each node
+#   - New Excel sheets: Nodes, Members, DOF, Supports, Releases, Colors
+# ============================================================
+
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from matplotlib.lines import Line2D
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
+from datetime import datetime
+
+# ============================================================
+# SECTION 1: INPUT DATA
+# ============================================================
+
+NODES = {
+    1: np.array([0.0, 0.0, 0.0]),
+    2: np.array([6.0, 0.0, 0.0]),
+    3: np.array([6.0, 0.0, 6.0]),
+    4: np.array([0.0, 0.0, 6.0]),
+    5: np.array([0.0, 6.0, 0.0]),
+    6: np.array([6.0, 6.0, 0.0]),
+    7: np.array([6.0, 6.0, 6.0]),
+    8: np.array([0.0, 6.0, 6.0]),
+}
+
+MEMBERS = {
+    1:  (1, 5),  2:  (2, 6),  3:  (3, 7),  4:  (4, 8),
+    5:  (5, 6),  6:  (7, 8),  7:  (5, 8),  8:  (6, 7),
+    9:  (1, 2),  10: (3, 4),  11: (1, 4),  12: (2, 3),
+}
+
+E  = 200e9
+G  = 77e9
+A  = 0.01
+Iy = 1.0e-4
+Iz = 1.0e-4
+J  = 2.0e-4
+
+BETA = {
+    1: 90, 2: 90, 3: 90, 4: 90,
+    5: 0, 6: 0, 7: 0, 8: 0,
+    9: 0, 10: 0, 11: 0, 12: 0,
+}
+
+PINNED_NODES = [1, 2, 3, 4]
+RELEASED_MEMBERS = [1, 3, 5, 7]
+
+LOADS = {
+    5: np.array([20000.0, -50000.0, 0.0, 0.0, 0.0, 0.0]),
+    6: np.array([0.0, -50000.0, 0.0, 0.0, 0.0, 0.0]),
+    7: np.array([0.0, -50000.0, 0.0, 0.0, 0.0, 0.0]),
+    8: np.array([0.0, -50000.0, 0.0, 0.0, 0.0, 0.0]),
+}
+
+DOF_LABELS = ["UX", "UY", "UZ", "RX", "RY", "RZ"]
+N_DOF      = 6
+N_NODES    = len(NODES)
+TOTAL_DOF  = N_NODES * N_DOF
+
+MEMBER_TYPE = {}
+for m in MEMBERS:
+    ni, nj = MEMBERS[m]
+    dy = abs(NODES[nj][1] - NODES[ni][1])
+    dx = abs(NODES[nj][0] - NODES[ni][0])
+    dz = abs(NODES[nj][2] - NODES[ni][2])
+    if dy > dx and dy > dz:
+        MEMBER_TYPE[m] = "Column"
+    elif ni in PINNED_NODES and nj in PINNED_NODES:
+        MEMBER_TYPE[m] = "Ground Beam"
+    else:
+        MEMBER_TYPE[m] = "Beam"
+
+# Rev. 2 color palette (from spec)
+C_COL    = "#1f5f8b"
+C_BEAM   = "#166534"
+C_GROUND = "#c2410c"
+C_PIN    = "#b0342f"
+C_REL    = "#c2410c"
+C_FREE   = "#16181d"
+C_LOAD   = "#d35400"
+C_BG     = "#f6f5f1"
+
+# ============================================================
+# SECTION 2: DOF ASSIGNMENT
+# ============================================================
+
+def build_dof_system():
+    node_dofs = {}
+    for n in NODES:
+        s = (n - 1) * N_DOF
+        node_dofs[n] = list(range(s, s + N_DOF))
+
+    restrained = []
+    for n in PINNED_NODES:
+        restrained.extend(node_dofs[n][:3])
+    restrained = sorted(restrained)
+
+    active = [d for d in range(TOTAL_DOF) if d not in restrained]
+    return node_dofs, restrained, active
+
+# ============================================================
+# SECTION 3: LOCAL STIFFNESS MATRIX (12x12)
+# ============================================================
+
+def element_stiffness_local(member_length):
+    L = member_length
+    k = np.zeros((12, 12))
+
+    a = E * A / L
+    t = G * J / L
+
+    s1 = 12.0 * E * Iz / L**3
+    s2 =  6.0 * E * Iz / L**2
+    s3 =  4.0 * E * Iz / L
+    s4 =  2.0 * E * Iz / L
+
+    q1 = 12.0 * E * Iy / L**3
+    q2 =  6.0 * E * Iy / L**2
+    q3 =  4.0 * E * Iy / L
+    q4 =  2.0 * E * Iy / L
+
+    k[0, 0] =  a;  k[0, 6] = -a
+    k[6, 0] = -a;  k[6, 6] =  a
+    k[3, 3] =  t;  k[3, 9] = -t
+    k[9, 3] = -t;  k[9, 9] =  t
+
+    k[1, 1] = s1;  k[1, 5]  = s2;   k[1, 7]  = -s1;  k[1, 11]  = s2
+    k[5, 1] = s2;  k[5, 5]  = s3;   k[5, 7]  = -s2;  k[5, 11]  = s4
+    k[7, 1] = -s1; k[7, 5]  = -s2;  k[7, 7]  =  s1;  k[7, 11]  = -s2
+    k[11, 1] = s2; k[11, 5] = s4;   k[11, 7] = -s2;  k[11, 11] = s3
+
+    k[2, 2]  = q1;  k[2, 4]  = -q2;  k[2, 8]  = -q1;  k[2, 10]  = -q2
+    k[4, 2]  = -q2; k[4, 4]  =  q3;  k[4, 8]  =  q2;  k[4, 10]  =  q4
+    k[8, 2]  = -q1; k[8, 4]  =  q2;  k[8, 8]  =  q1;  k[8, 10]  =  q2
+    k[10, 2] = -q2; k[10, 4] =  q4;  k[10, 8] =  q2;  k[10, 10] =  q3
+
+    return k
+
+# ============================================================
+# SECTION 4: TRANSFORMATION MATRIX (with Beta Angle)
+# ============================================================
+
+def build_transformation(coords_i, coords_j, beta_deg):
+    beta = np.radians(beta_deg)
+    d = coords_j - coords_i
+    L = np.linalg.norm(d)
+    e1 = d / L
+
+    ref = np.array([0.0, 1.0, 0.0])
+    if abs(np.dot(e1, ref)) > 0.999:
+        ref = np.array([0.0, 0.0, 1.0])
+
+    e2_temp = ref - np.dot(ref, e1) * e1
+    e2_temp /= np.linalg.norm(e2_temp)
+    e3_temp = np.cross(e1, e2_temp)
+
+    e2 = e2_temp * np.cos(beta) + e3_temp * np.sin(beta)
+    e3 = -e2_temp * np.sin(beta) + e3_temp * np.cos(beta)
+
+    lam = np.array([e1, e2, e3])
+    T = np.zeros((12, 12))
+    T[0:3, 0:3] = lam;  T[3:6, 3:6] = lam
+    T[6:9, 6:9] = lam;  T[9:12, 9:12] = lam
+
+    return T, L, lam
+
+# ============================================================
+# SECTION 5: MEMBER END RELEASES (Static Condensation)
+# ============================================================
+
+def apply_releases(k_local, released_local_indices):
+    all_dofs = list(range(12))
+    active   = sorted([d for d in all_dofs if d not in released_local_indices])
+    released = sorted(released_local_indices)
+
+    if not released:
+        return k_local.copy(), active, released, k_local.copy()
+
+    k_aa = k_local[np.ix_(active, active)]
+    k_ar = k_local[np.ix_(active, released)]
+    k_ra = k_local[np.ix_(released, active)]
+    k_rr = k_local[np.ix_(released, released)]
+
+    k_condensed = k_aa - k_ar @ np.linalg.solve(k_rr, k_ra)
+
+    k_full = np.zeros((12, 12))
+    for i, di in enumerate(active):
+        for j, dj in enumerate(active):
+            k_full[di, dj] = k_condensed[i, j]
+
+    return k_full, active, released, k_condensed
+
+# ============================================================
+# SECTION 6: GLOBAL ASSEMBLY
+# ============================================================
+
+def assemble_global_K(member_data, node_dofs):
+    K = np.zeros((TOTAL_DOF, TOTAL_DOF))
+    for m, data in member_data.items():
+        ni, nj = MEMBERS[m]
+        gdofs = node_dofs[ni] + node_dofs[nj]
+        kg = data["k_global"]
+        for i in range(12):
+            for j in range(12):
+                K[gdofs[i], gdofs[j]] += kg[i, j]
+    return K
+
+# ============================================================
+# SECTION 7: SOLVER
+# ============================================================
+
+def solve_system(K, F, restrained, active):
+    K_ff = K[np.ix_(active, active)]
+    F_f  = F[active]
+    cond = np.linalg.cond(K_ff)
+    print(f"  Condition number of K_ff: {cond:.4e}")
+    U_f = np.linalg.solve(K_ff, F_f)
+    U = np.zeros(TOTAL_DOF)
+    U[active] = U_f
+    R = K @ U - F
+    return U, R
+
+# ============================================================
+# SECTION 8: POST-PROCESSING
+# ============================================================
+
+def compute_member_forces(member_data, U):
+    results = {}
+    for m, data in member_data.items():
+        u_global = U[data["global_dofs"]]
+        u_local  = data["T"] @ u_global
+        if data["released"]:
+            u_a = u_local[data["active_local"]]
+            f_a = data["k_condensed"] @ u_a
+            f_local = np.zeros(12)
+            for i, di in enumerate(data["active_local"]):
+                f_local[di] = f_a[i]
+        else:
+            f_local = data["k_original"] @ u_local
+        results[m] = f_local
+    return results
+
+# ============================================================
+# SECTION 9: STRUCTURAL DIAGRAM (Rev. 2)
+# ============================================================
+
+def _draw_pin(ax, x, y, z, size=0.55):
+    """Red pin-support triangle + ground line + hatching."""
+    s = size
+    h = size * 1.6
+
+    # triangle in world X-Y plane (plot: x, z, y)
+    tx = [x, x - s, x + s, x]
+    ty = [z, z, z, z]
+    tz = [y, y - h, y - h, y]
+    ax.plot(tx, ty, tz, color=C_PIN, linewidth=2.0, solid_capstyle="round", zorder=18)
+    ax.plot([tx[1], tx[2]], [ty[1], ty[2]], [tz[1], tz[2]],
+            color=C_PIN, linewidth=2.2, zorder=18)
+
+    # ground line at Y=0
+    gl = s + 0.35
+    ax.plot([x - gl, x + gl], [z, z], [0, 0],
+            color=C_PIN, linewidth=2.2, zorder=18)
+
+    # diagonal hatching
+    for i in range(5):
+        xi = x - s + i * (2 * s) / 4
+        ax.plot([xi, xi - 0.18], [z, z], [0, -0.30],
+                color=C_PIN, linewidth=0.9, zorder=18)
+
+
+def _draw_local_axes(ax, ci, cj, lam, scale=0.6):
+    """Draw local x (red), y (green), z (blue) arrows at member midpoint."""
+    mid = (ci + cj) / 2
+    colors = ["#c0392b", "#27ae60", "#2980b9"]
+    labels = ["x", "y", "z"]
+    for k in range(3):
+        origin_plot = np.array([mid[0], mid[2], mid[1]])
+        direction_world = lam[k]
+        d_plot = np.array([direction_world[0], direction_world[2], direction_world[1]]) * scale
+        ax.quiver(origin_plot[0], origin_plot[1], origin_plot[2],
+                  d_plot[0], d_plot[1], d_plot[2],
+                  color=colors[k], arrow_length_ratio=0.35,
+                  linewidth=1.2, alpha=0.6, zorder=8)
+        end_plot = origin_plot + d_plot
+        ax.text(end_plot[0], end_plot[1], end_plot[2], labels[k],
+                color=colors[k], fontsize=6, ha="center", alpha=0.7, zorder=8)
+
+
+def plot_structural_diagram(member_data, U, R, node_dofs, restrained, active):
+    fig = plt.figure(figsize=(18, 13), facecolor="white")
+    ax  = fig.add_subplot(111, projection="3d", facecolor=C_BG)
+
+    # ---- ground plane (XZ at Y=0) ----
+    ground = Poly3DCollection(
+        [[(0, 0, 0), (6, 0, 0), (6, 6, 0), (0, 6, 0)]],
+        alpha=0.08, facecolor="#aaaaaa", edgecolor="none",
+    )
+    ax.add_collection3d(ground)
+
+    # ---- members ----
+    for m, (ni, nj) in MEMBERS.items():
+        ci = NODES[ni].copy()
+        cj = NODES[nj].copy()
+        mtype = MEMBER_TYPE[m]
+        col = C_COL if mtype == "Column" else C_BEAM if mtype == "Beam" else C_GROUND
+        lw  = 3.0 if mtype == "Column" else 2.0
+
+        ax.plot([ci[0], cj[0]], [ci[2], cj[2]], [ci[1], cj[1]],
+                color=col, linewidth=lw, solid_capstyle="round", zorder=5)
+
+        # member label
+        mid = (ci + cj) / 2
+        ax.text(mid[0], mid[2], mid[1] + 0.30, f"M{m}",
+                color=col, fontsize=8, ha="center", fontweight="bold",
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", alpha=0.85, ec="none"),
+                zorder=10)
+
+        # local axes
+        _draw_local_axes(ax, ci, cj, member_data[m]["lam"], scale=0.55)
+
+        # MZ release circles (red outline)
+        if m in RELEASED_MEMBERS:
+            for pos in [ci, cj]:
+                ax.plot(pos[0], pos[2], pos[1], "o", markersize=10,
+                        markerfacecolor="white", markeredgecolor=C_REL,
+                        markeredgewidth=2.2, zorder=15)
+
+    # ---- nodes ----
+    for n, c in NODES.items():
+        is_pinned = n in PINNED_NODES
+        if is_pinned:
+            ax.scatter(c[0], c[2], c[1], color=C_PIN, s=10,
+                       marker="o", edgecolors="black", linewidths=1.5, zorder=20)
+            _draw_pin(ax, c[0], c[1], c[2], size=0.55)
+        else:
+            ax.scatter(c[0], c[2], c[1], color=C_FREE, s=8,
+                       marker="o", edgecolors="black", linewidths=0.8, zorder=20)
+
+        # node label
+        ax.text(c[0] + 0.35, c[2] + 0.35, c[1] + 0.15, str(n),
+                fontsize=12, fontweight="bold", color="black",
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.92, ec="#aaaaaa"),
+                zorder=25)
+
+        # DOF labels
+        dofs = node_dofs[n]
+        dof_str = ", ".join(
+            f"{DOF_LABELS[k]}={dofs[k]+1}" for k in range(6)
+        )
+        ax.text(c[0] + 0.35, c[2] + 0.35, c[1] - 0.35, dof_str,
+                fontsize=5.5, color="#555555", family="monospace",
+                bbox=dict(boxstyle="round,pad=0.1", fc="white", alpha=0.8, ec="none"),
+                zorder=25)
+
+    # ---- load arrows ----
+    for n, lv in LOADS.items():
+        c = NODES[n]
+        fx, fy, fz = lv[0], lv[1], lv[2]
+        sc = 3.0 / 50000.0
+        if abs(fx) > 1e-6:
+            ax.quiver(c[0], c[2], c[1], fx * sc, 0, 0,
+                      color=C_LOAD, arrow_length_ratio=0.30, linewidth=2.5, zorder=30)
+            ax.text(c[0] + fx * sc + (0.3 if fx > 0 else -0.9),
+                    c[2], c[1],
+                    f"{fx/1e3:.0f} kN", color=C_LOAD, fontsize=8,
+                    fontweight="bold", zorder=30)
+        if abs(fy) > 1e-6:
+            ax.quiver(c[0], c[2], c[1], 0, 0, fy * sc,
+                      color=C_LOAD, arrow_length_ratio=0.30, linewidth=2.5, zorder=30)
+            ax.text(c[0], c[2], c[1] + fy * sc + (-0.6 if fy < 0 else 0.3),
+                    f"{fy/1e3:.0f} kN", color=C_LOAD, fontsize=8,
+                    fontweight="bold", ha="center", zorder=30)
+
+    # ---- global axis triad ----
+    al = 1.5
+    ay = -0.5
+    ax.quiver(0, 0, ay, al, 0, 0, color="#c0392b", arrow_length_ratio=0.28, linewidth=2.5)
+    ax.text(al + 0.25, 0, ay, "X", color="#c0392b", fontsize=13, fontweight="bold")
+    ax.quiver(0, 0, ay, 0, al, 0, color="#27ae60", arrow_length_ratio=0.28, linewidth=2.5)
+    ax.text(0, al + 0.25, ay, "Z", color="#27ae60", fontsize=13, fontweight="bold")
+    ax.quiver(0, 0, ay, 0, 0, al, color="#2980b9", arrow_length_ratio=0.28, linewidth=2.5)
+    ax.text(0, 0, ay + al + 0.25, "Y", color="#2980b9", fontsize=13, fontweight="bold")
+
+    # ---- axis labels + limits ----
+    ax.set_xlabel("X (m)", fontsize=11, labelpad=10)
+    ax.set_ylabel("Z (m)", fontsize=11, labelpad=10)
+    ax.set_zlabel("Y (m)", fontsize=11, labelpad=10)
+    ax.set_xlim([-1.5, 8])
+    ax.set_ylim([-1.5, 8])
+    ax.set_zlim([-2.0, 8])
+    ax.xaxis.pane.fill = False
+    ax.yaxis.pane.fill = False
+    ax.zaxis.pane.fill = False
+    ax.grid(True, alpha=0.25, linewidth=0.5)
+
+    # ---- info box ----
+    info = (
+        f"6m x 6m x 6m Cube Structure — Rev. 2\n"
+        f"Nodes: {N_NODES}   Members: {len(MEMBERS)}\n"
+        f"DOF: {TOTAL_DOF} total | {len(restrained)} restrained | {len(active)} active\n"
+        f"Supports: Pinned at nodes {PINNED_NODES}\n"
+        f"Releases: MZ (both ends) at members {RELEASED_MEMBERS}\n"
+        f"Local axes shown at member midpoints"
+    )
+    ax.text2D(0.01, 0.99, info, transform=ax.transAxes,
+              fontsize=8, va="top", family="monospace",
+              bbox=dict(boxstyle="round,pad=0.5", fc="#fffff0", ec="#999999", alpha=0.95))
+
+    # ---- legend ----
+    legend_els = [
+        Line2D([0], [0], color=C_COL,    lw=3.0, label="Column (Beta=90)"),
+        Line2D([0], [0], color=C_BEAM,   lw=2.0, label="Beam (Beta=0)"),
+        Line2D([0], [0], color=C_GROUND, lw=2.0, label="Ground Beam (Beta=0)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=C_PIN,
+               markeredgecolor=C_PIN, ms=10, label="Pin Support"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="white",
+               markeredgecolor=C_REL, ms=10, label="MZ Release"),
+        Line2D([0], [0], color=C_LOAD, lw=2.5, label="Applied Load"),
+        Line2D([0], [0], color="#c0392b", lw=1, label="Local x"),
+        Line2D([0], [0], color="#27ae60", lw=1, label="Local y"),
+        Line2D([0], [0], color="#2980b9", lw=1, label="Local z"),
+    ]
+    ax.legend(handles=legend_els, loc="lower right", fontsize=8,
+              framealpha=0.95, edgecolor="#aaaaaa", fancybox=True)
+
+    ax.set_title(
+        "Structural Diagram — RISA / STAAD Style\n"
+        "Rev. 2 : Pinned Supports | Beta Angles | End Releases | Local Axes",
+        fontsize=14, fontweight="bold", pad=18,
+    )
+    ax.view_init(elev=22, azim=-55)
+
+    plt.tight_layout()
+    plt.savefig("structural_diagram.png", dpi=200, bbox_inches="tight", facecolor="white")
+    print("  Saved: structural_diagram.png")
+    plt.show()
+
+# ============================================================
+# SECTION 10: EXCEL OUTPUT (Rev. 2 — new sheet structure)
+# ============================================================
+
+def write_excel_output(U, R, member_forces, member_data, node_dofs, restrained, active):
+    wb = Workbook()
+    hdr_font    = Font(bold=True, color="FFFFFF", size=10)
+    hdr_fill    = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    hdr_align   = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    thin_border = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"), bottom=Side(style="thin"),
+    )
+    num_fmt_6 = "0.000000E+00"
+    num_fmt_4 = "0.0000E+00"
+
+    def style_header(ws, row, ncols):
+        for col in range(1, ncols + 1):
+            cell = ws.cell(row=row, column=col)
+            cell.font = hdr_font
+            cell.fill = hdr_fill
+            cell.alignment = hdr_align
+            cell.border = thin_border
+
+    def write_row(ws, row, data, fmt=None):
+        for col, val in enumerate(data, 1):
+            cell = ws.cell(row=row, column=col, value=val)
+            cell.border = thin_border
+            cell.alignment = Alignment(horizontal="center")
+            if fmt and isinstance(val, float):
+                cell.number_format = fmt
+
+    def color_fill(hex_color):
+        return PatternFill(start_color=hex_color.replace("#", ""),
+                           end_color=hex_color.replace("#", ""), fill_type="solid")
+
+    # --- Sheet: Nodes ---
+    ws = wb.active
+    ws.title = "Nodes"
+    hdrs = ["Node", "X (m)", "Y (m)", "Z (m)", "Support", "Color Code"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    for i, n in enumerate(NODES, 2):
+        c = NODES[n]
+        sup = "Pinned" if n in PINNED_NODES else "Free"
+        clr = C_PIN if n in PINNED_NODES else C_FREE
+        write_row(ws, i, [n, c[0], c[1], c[2], sup, clr])
+        ws.cell(row=i, column=6).fill = color_fill(clr)
+
+    # --- Sheet: Members ---
+    ws = wb.create_sheet("Members")
+    hdrs = ["Member", "i-Node", "j-Node", "Type", "Beta (deg)",
+            "Release", "Color Code"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    type_colors = {"Column": C_COL, "Beam": C_BEAM, "Ground Beam": C_GROUND}
+    for i, m in enumerate(MEMBERS, 2):
+        ni, nj = MEMBERS[m]
+        rel = "MZ_i + MZ_j" if m in RELEASED_MEMBERS else "None"
+        clr = type_colors[MEMBER_TYPE[m]]
+        write_row(ws, i, [m, ni, nj, MEMBER_TYPE[m], BETA[m], rel, clr])
+        ws.cell(row=i, column=7).fill = color_fill(clr)
+
+    # --- Sheet: DOF ---
+    ws = wb.create_sheet("DOF")
+    hdrs = ["DOF #", "Node", "DOF Type", "Restrained?"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    row = 2
+    for n in NODES:
+        dofs = node_dofs[n]
+        for k, lbl in enumerate(DOF_LABELS):
+            is_r = "Yes" if dofs[k] in restrained else "No"
+            write_row(ws, row, [dofs[k] + 1, n, lbl, is_r])
+            if is_r == "Yes":
+                ws.cell(row=row, column=4).fill = color_fill("#ffe0e0")
+            row += 1
+
+    # --- Sheet: Supports ---
+    ws = wb.create_sheet("Supports")
+    hdrs = ["Node", "UX", "UY", "UZ", "RX", "RY", "RZ"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    for i, n in enumerate(PINNED_NODES, 2):
+        dofs = node_dofs[n]
+        statuses = []
+        for k in range(6):
+            statuses.append("Fixed" if dofs[k] in restrained else "Free")
+        write_row(ws, i, [n] + statuses)
+        for k in range(3):
+            ws.cell(row=i, column=k + 2).fill = color_fill("#ffe0e0")
+
+    # --- Sheet: Releases ---
+    ws = wb.create_sheet("Releases")
+    hdrs = ["Member", "i-Node", "j-Node", "Released DOF", "End"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    row = 2
+    for m in RELEASED_MEMBERS:
+        ni, nj = MEMBERS[m]
+        write_row(ws, row, [m, ni, nj, "MZ (Local DOF 6)", "i-end"])
+        ws.cell(row=row, column=4).fill = color_fill("#ffe0e0")
+        row += 1
+        write_row(ws, row, [m, ni, nj, "MZ (Local DOF 12)", "j-end"])
+        ws.cell(row=row, column=4).fill = color_fill("#ffe0e0")
+        row += 1
+
+    # --- Sheet: Colors ---
+    ws = wb.create_sheet("Colors")
+    hdrs = ["Element", "Color Code", "Hex"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    color_legend = [
+        ("Columns",        C_COL),
+        ("Top Beams",      C_BEAM),
+        ("Ground Beams",   C_GROUND),
+        ("Pinned Supports", C_PIN),
+        ("MZ Releases",    C_REL),
+        ("Free Nodes",     C_FREE),
+        ("Applied Loads",  C_LOAD),
+        ("Background",     C_BG),
+    ]
+    for i, (name, hex_val) in enumerate(color_legend, 2):
+        write_row(ws, i, [name, "", hex_val])
+        ws.cell(row=i, column=2).fill = color_fill(hex_val)
+
+    filepath = "cube_solver_output.xlsx"
+    wb.save(filepath)
+    print(f"  Saved: {filepath}")
+
+# ============================================================
+# SECTION 11: MAIN EXECUTION
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 60)
+    print(" CUBE STRUCTURAL SOLVER — Rev. 2")
+    print(" Direct Stiffness Method | 3D Frame")
+    print("=" * 60)
+
+    print("\n[1] Building DOF system...")
+    node_dofs, restrained, active = build_dof_system()
+    print(f"  Total DOF:  {TOTAL_DOF}")
+    print(f"  Restrained: {len(restrained)}  -> {restrained}")
+    print(f"  Active:     {len(active)}")
+
+    print("\n[2] Computing member stiffness matrices...")
+    member_data = {}
+    for m in MEMBERS:
+        ni, nj = MEMBERS[m]
+        T, L, lam = build_transformation(NODES[ni], NODES[nj], BETA[m])
+        k_local_orig = element_stiffness_local(L)
+
+        if m in RELEASED_MEMBERS:
+            k_rel, active_loc, released_loc, k_cond = apply_releases(
+                k_local_orig, [5, 11]
+            )
+        else:
+            k_rel = k_local_orig.copy()
+            active_loc = list(range(12))
+            released_loc = []
+            k_cond = k_local_orig.copy()
+
+        k_global = T.T @ k_rel @ T
+
+        member_data[m] = {
+            "ni": ni, "nj": nj, "L": L, "T": T, "lam": lam,
+            "k_original": k_local_orig, "k_global": k_global,
+            "k_condensed": k_cond,
+            "active_local": active_loc, "released_local": released_loc,
+            "released": m in RELEASED_MEMBERS,
+            "global_dofs": node_dofs[ni] + node_dofs[nj],
+        }
+        rel_str = f"  Released: {released_loc}" if released_loc else ""
+        print(f"  M{m:2d} ({ni}->{nj})  L={L:.4f}m  "
+              f"beta={BETA[m]:3d}  [{MEMBER_TYPE[m]}]{rel_str}")
+
+    print("\n[3] Assembling global stiffness matrix...")
+    K = assemble_global_K(member_data, node_dofs)
+    print(f"  K shape: {K.shape}  max diag: {np.max(np.diag(K)):.4e}")
+
+    print("\n[4] Building load vector...")
+    F = np.zeros(TOTAL_DOF)
+    for n, lv in LOADS.items():
+        dofs = node_dofs[n]
+        for k in range(6):
+            F[dofs[k]] += lv[k]
+    app_fx = sum(LOADS[n][0] for n in LOADS)
+    app_fy = sum(LOADS[n][1] for n in LOADS)
+    app_fz = sum(LOADS[n][2] for n in LOADS)
+    print(f"  Applied: FX={app_fx:.0f} N  FY={app_fy:.0f} N  FZ={app_fz:.0f} N")
+
+    print("\n[5] Solving system...")
+    U, R = solve_system(K, F, restrained, active)
+
+    print("\n[6] Nodal Displacements:")
+    print(f"  {'Node':>4s}  {'UX (m)':>12s}  {'UY (m)':>12s}  {'UZ (m)':>12s}  "
+          f"{'RX (rad)':>12s}  {'RY (rad)':>12s}  {'RZ (rad)':>12s}")
+    for n in NODES:
+        d = node_dofs[n]
+        vals = [U[d[k]] for k in range(6)]
+        print(f"  {n:4d}  {vals[0]:12.6e}  {vals[1]:12.6e}  {vals[2]:12.6e}  "
+              f"{vals[3]:12.6e}  {vals[4]:12.6e}  {vals[5]:12.6e}")
+
+    print("\n[7] Support Reactions:")
+    print(f"  {'Node':>4s}  {'FX (N)':>12s}  {'FY (N)':>12s}  {'FZ (N)':>12s}  "
+          f"{'MX (Nm)':>12s}  {'MY (Nm)':>12s}  {'MZ (Nm)':>12s}")
+    for n in PINNED_NODES:
+        d = node_dofs[n]
+        vals = [R[d[k]] for k in range(6)]
+        print(f"  {n:4d}  {vals[0]:12.4f}  {vals[1]:12.4f}  {vals[2]:12.4f}  "
+              f"{vals[3]:12.4f}  {vals[4]:12.4f}  {vals[5]:12.4f}")
+
+    sum_fx = sum(R[node_dofs[n][0]] for n in PINNED_NODES)
+    sum_fy = sum(R[node_dofs[n][1]] for n in PINNED_NODES)
+    sum_fz = sum(R[node_dofs[n][2]] for n in PINNED_NODES)
+    print(f"\n  Equilibrium check:")
+    print(f"    Sum R_FX + Sum P_FX = {sum_fx + app_fx:.6f} N")
+    print(f"    Sum R_FY + Sum P_FY = {sum_fy + app_fy:.6f} N")
+    print(f"    Sum R_FZ + Sum P_FZ = {sum_fz + app_fz:.6f} N")
+
+    print("\n[8] Member End Forces (Local Axes):")
+    member_forces = compute_member_forces(member_data, U)
+    print(f"  {'Mbr':>4s}  {'End':>3s}  {'Fx (N)':>12s}  {'Fy (N)':>12s}  "
+          f"{'Fz (N)':>12s}  {'Mx (Nm)':>12s}  {'My (Nm)':>12s}  {'Mz (Nm)':>12s}")
+    for m in sorted(member_forces.keys()):
+        f = member_forces[m]
+        print(f"  {m:4d}    i   {f[0]:12.4f}  {f[1]:12.4f}  {f[2]:12.4f}  "
+              f"{f[3]:12.4f}  {f[4]:12.4f}  {f[5]:12.4f}")
+        print(f"  {'':>4s}    j   {f[6]:12.4f}  {f[7]:12.4f}  {f[8]:12.4f}  "
+              f"{f[9]:12.4f}  {f[10]:12.4f}  {f[11]:12.4f}")
+        if m in RELEASED_MEMBERS:
+            tol = 1e-6
+            mz_i, mz_j = abs(f[5]), abs(f[11])
+            print(f"         Release check: Mz_i={'OK' if mz_i < tol else f'WARN ({mz_i:.4f})'}"
+                  f"  Mz_j={'OK' if mz_j < tol else f'WARN ({mz_j:.4f})'}")
+
+    print("\n[9] Generating structural diagram...")
+    plot_structural_diagram(member_data, U, R, node_dofs, restrained, active)
+
+    print("\n[10] Writing Excel output...")
+    write_excel_output(U, R, member_forces, member_data, node_dofs, restrained, active)
+
+    print("\n" + "=" * 60)
+    print(" SOLVER COMPLETE — Rev. 2")
+    print("=" * 60)

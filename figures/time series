@@ -1,0 +1,123 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+ 
+# ==========================================
+# 1. GENERATE EXTREMELY SLOW, SMOOTH DATA
+# ==========================================
+# Create 600 steps (covers about 3.5 days to match the screenshot)
+time_range = pd.date_range(start='2026-01-01 00:00', periods=600, freq='300s')
+ 
+# Create a slow, steady ramp-up and ramp-down (Like a logistic curve)
+# This mimics a reservoir slowly filling and then flattening out
+x = np.linspace(-5, 5, len(time_range))
+# Base level is 14. It slowly rises to 20 over a long time period
+stage = 14 + (6 / (1 + np.exp(-x)))
+ 
+# Add microscopic sensor noise (0.005 is very tiny, similar to the screenshot)
+stage += np.random.normal(0, 0.005, len(time_range))
+ 
+df = pd.DataFrame({'Time': time_range, 'Stage': stage})
+ 
+# ==========================================
+# 2. CALCULATE FINITE DIFFERENCES
+# ==========================================
+df['d1f'] = df['Stage'].diff()
+df['d1b'] = df['Stage'].diff().shift(-1)
+df['d1c'] = df['Stage'].diff(periods=2) / 2
+ 
+df['d2f'] = df['d1f'].diff()
+df['d2b'] = df['d1b'].diff().shift(-1)
+df['d2c'] = df['d1c'].diff(periods=2) / 2
+ 
+df.dropna(inplace=True)
+ 
+# ==========================================
+# 3. PLOTTING (4x2 Grid)
+# ==========================================
+print("Generating plots...")
+ 
+fig = plt.figure(figsize=(16, 10))
+fig.suptitle('Depth Time Series Analysis with Finite Differences', fontsize=14, fontweight='bold')
+ 
+# Graph 1: Original Time Series (Top, full width)
+ax1 = plt.subplot2grid((4, 4), (0, 0), colspan=4)
+ax1.plot(df['Time'], df['Stage'], color='#1f77b4', linewidth=1.5)
+ax1.set_title('Graph 1 - Original Time Series: Reservoir Stage')
+ax1.set_ylabel('Depth (m)')
+ax1.set_ylim(13, 21) # Force the Y-axis to match the professor's exact range
+ax1.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax1.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 2: Forward Difference (Left - Row 1)
+ax2 = plt.subplot2grid((4, 4), (1, 0), colspan=2)
+ax2.plot(df['Time'], df['d1f'], color='#1f77b4', linewidth=0.8)
+ax2.set_title('Graph 2 - Forward Difference (d1f)')
+ax2.set_ylabel('Rate of Change (m/h)')
+ax2.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax2.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 3: Backward Difference (Left - Row 2)
+ax3 = plt.subplot2grid((4, 4), (2, 0), colspan=2)
+ax3.plot(df['Time'], df['d1b'], color='#1f77b4', linewidth=0.8)
+ax3.set_title('Graph 3 - Backward Difference (d1b)')
+ax3.set_ylabel('Rate of Change (m/h)')
+ax3.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax3.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 4: Centered Difference (Left - Row 3)
+ax4 = plt.subplot2grid((4, 4), (3, 0), colspan=2)
+ax4.plot(df['Time'], df['d1c'], color='#1f77b4', linewidth=0.8)
+ax4.set_title('Graph 4 - Centered Difference (d1c)')
+ax4.set_xlabel('Time (Hrs)')
+ax4.set_ylabel('Rate of Change (m/h)')
+ax4.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax4.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 5: Forward 2nd Difference (Right - Row 1)
+ax5 = plt.subplot2grid((4, 4), (1, 2), colspan=2)
+ax5.plot(df['Time'], df['d2f'], color='#1f77b4', linewidth=0.5)
+ax5.set_title('Graph 5 - Forward Difference (d2f)')
+ax5.set_ylabel('Acceleration (m/h²)')
+ax5.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax5.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 6: Backward 2nd Difference (Right - Row 2)
+ax6 = plt.subplot2grid((4, 4), (2, 2), colspan=2)
+ax6.plot(df['Time'], df['d2b'], color='#1f77b4', linewidth=0.5)
+ax6.set_title('Graph 6 - Backward Difference (d2b)')
+ax6.set_ylabel('Acceleration (m/h²)')
+ax6.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax6.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Graph 7: Centered 2nd Difference (Right - Row 3)
+ax7 = plt.subplot2grid((4, 4), (3, 2), colspan=2)
+ax7.plot(df['Time'], df['d2c'], color='#1f77b4', linewidth=0.5)
+ax7.set_title('Graph 7 - Centered Difference (d2c)')
+ax7.set_xlabel('Time (Hrs)')
+ax7.set_ylabel('Acceleration (m/h²)')
+ax7.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M'))
+for label in ax7.get_xticklabels():
+    label.set_rotation(45)
+    label.set_fontsize(7)
+ 
+# Adjust layout
+plt.tight_layout()
+plt.subplots_adjust(top=0.92)
+ 
+print("Displaying plot...")
+plt.show()
+print("Done.")
