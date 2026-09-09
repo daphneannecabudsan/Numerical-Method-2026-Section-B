@@ -18,6 +18,9 @@ from matplotlib.lines import Line2D
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, Border, Side, PatternFill
 from datetime import datetime
+from unit_system import get_unit_system, METRIC, IMPERIAL
+from materials import create_default_library as create_material_library
+from sections import create_default_library as create_section_library
 
 # ============================================================
 # SECTION 1: INPUT DATA
@@ -40,12 +43,12 @@ MEMBERS = {
     9:  (1, 2),  10: (3, 4),  11: (1, 4),  12: (2, 3),
 }
 
-E  = 200e9
-G  = 77e9
-A  = 0.01
-Iy = 1.0e-4
-Iz = 1.0e-4
-J  = 2.0e-4
+UNIT_SYSTEM = get_unit_system("Metric")
+MATERIAL_LIB = create_material_library()
+SECTION_LIB  = create_section_library()
+
+A36_STEEL = MATERIAL_LIB.get("ASTM A36 Steel")
+DEFAULT_SECTION = SECTION_LIB.get("Cube Default")
 
 BETA = {
     1: 90, 2: 90, 3: 90, 4: 90,
@@ -55,6 +58,9 @@ BETA = {
 
 PINNED_NODES = [1, 2, 3, 4]
 RELEASED_MEMBERS = [1, 3, 5, 7]
+
+MEMBER_MATERIAL = {m: A36_STEEL for m in MEMBERS}
+MEMBER_SECTION  = {m: DEFAULT_SECTION for m in MEMBERS}
 
 LOADS = {
     5: np.array([20000.0, -50000.0, 0.0, 0.0, 0.0, 0.0]),
@@ -113,7 +119,7 @@ def build_dof_system():
 # SECTION 3: LOCAL STIFFNESS MATRIX (12x12)
 # ============================================================
 
-def element_stiffness_local(member_length):
+def element_stiffness_local(member_length, E, G, A, Iy, Iz, J):
     L = member_length
     k = np.zeros((12, 12))
 
@@ -407,7 +413,10 @@ def plot_structural_diagram(member_data, U, R, node_dofs, restrained, active):
 
     # ---- info box ----
     info = (
-        f"6m x 6m x 6m Cube Structure — Rev. 2\n"
+        f"6m x 6m x 6m Cube Structure — Rev. 3\n"
+        f"Unit System: {UNIT_SYSTEM.name}\n"
+        f"Material: {mat.name}\n"
+        f"Section: {sec.name}\n"
         f"Nodes: {N_NODES}   Members: {len(MEMBERS)}\n"
         f"DOF: {TOTAL_DOF} total | {len(restrained)} restrained | {len(active)} active\n"
         f"Supports: Pinned at nodes {PINNED_NODES}\n"
@@ -437,7 +446,7 @@ def plot_structural_diagram(member_data, U, R, node_dofs, restrained, active):
 
     ax.set_title(
         "Structural Diagram — RISA / STAAD Style\n"
-        "Rev. 2 : Pinned Supports | Beta Angles | End Releases | Local Axes",
+        "Rev. 3 : Material Library | Section Library | Unit System",
         fontsize=14, fontweight="bold", pad=18,
     )
     ax.view_init(elev=22, azim=-55)
@@ -579,6 +588,28 @@ def write_excel_output(U, R, member_forces, member_data, node_dofs, restrained, 
         write_row(ws, i, [name, "", hex_val])
         ws.cell(row=i, column=2).fill = color_fill(hex_val)
 
+    # --- Sheet: Materials ---
+    ws = wb.create_sheet("Materials")
+    hdrs = ["Member", "Type", "Material", "E (Pa)", "G (Pa)", "Density (kg/m3)", "Yield (Pa)"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    for i, m in enumerate(MEMBERS, 2):
+        mat_m = MEMBER_MATERIAL[m]
+        write_row(ws, i, [m, MEMBER_TYPE[m], mat_m.name, mat_m.E, mat_m.G,
+                          mat_m.density, mat_m.yield_strength])
+
+    # --- Sheet: Sections ---
+    ws = wb.create_sheet("Sections")
+    hdrs = ["Member", "Type", "Section", "A (m2)", "Iy (m4)", "Iz (m4)", "J (m4)"]
+    for c, h in enumerate(hdrs, 1):
+        ws.cell(row=1, column=c, value=h)
+    style_header(ws, 1, len(hdrs))
+    for i, m in enumerate(MEMBERS, 2):
+        sec_m = MEMBER_SECTION[m]
+        write_row(ws, i, [m, MEMBER_TYPE[m], sec_m.name, sec_m.A,
+                          sec_m.Iy, sec_m.Iz, sec_m.J])
+
     filepath = "cube_solver_output.xlsx"
     wb.save(filepath)
     print(f"  Saved: {filepath}")
@@ -589,9 +620,15 @@ def write_excel_output(U, R, member_forces, member_data, node_dofs, restrained, 
 
 if __name__ == "__main__":
     print("=" * 60)
-    print(" CUBE STRUCTURAL SOLVER — Rev. 2")
+    print(" CUBE STRUCTURAL SOLVER — Rev. 3")
     print(" Direct Stiffness Method | 3D Frame")
     print("=" * 60)
+
+    mat = MEMBER_MATERIAL[1]
+    sec = MEMBER_SECTION[1]
+    print(f"\n  Unit System : {UNIT_SYSTEM.name}")
+    print(f"  Material    : {mat.name}  (E={mat.E:.2e} Pa, G={mat.G:.2e} Pa)")
+    print(f"  Section     : {sec.name}  (A={sec.A} m2)")
 
     print("\n[1] Building DOF system...")
     node_dofs, restrained, active = build_dof_system()
@@ -604,7 +641,10 @@ if __name__ == "__main__":
     for m in MEMBERS:
         ni, nj = MEMBERS[m]
         T, L, lam = build_transformation(NODES[ni], NODES[nj], BETA[m])
-        k_local_orig = element_stiffness_local(L)
+        mat_m = MEMBER_MATERIAL[m]
+        sec_m = MEMBER_SECTION[m]
+        k_local_orig = element_stiffness_local(L, mat_m.E, mat_m.G,
+                                                sec_m.A, sec_m.Iy, sec_m.Iz, sec_m.J)
 
         if m in RELEASED_MEMBERS:
             k_rel, active_loc, released_loc, k_cond = apply_releases(
@@ -628,7 +668,8 @@ if __name__ == "__main__":
         }
         rel_str = f"  Released: {released_loc}" if released_loc else ""
         print(f"  M{m:2d} ({ni}->{nj})  L={L:.4f}m  "
-              f"beta={BETA[m]:3d}  [{MEMBER_TYPE[m]}]{rel_str}")
+              f"beta={BETA[m]:3d}  [{MEMBER_TYPE[m]}] "
+              f"mat={mat_m.name} sec={sec_m.name}{rel_str}")
 
     print("\n[3] Assembling global stiffness matrix...")
     K = assemble_global_K(member_data, node_dofs)
@@ -697,5 +738,5 @@ if __name__ == "__main__":
     write_excel_output(U, R, member_forces, member_data, node_dofs, restrained, active)
 
     print("\n" + "=" * 60)
-    print(" SOLVER COMPLETE — Rev. 2")
+    print(" SOLVER COMPLETE — Rev. 3")
     print("=" * 60)

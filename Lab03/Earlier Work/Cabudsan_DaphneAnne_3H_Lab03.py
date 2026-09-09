@@ -8,8 +8,14 @@ This script performs linear regression on CO₂ vs Temperature data
 using the least squares formulas.
 """
 
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
+
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+except Exception:
+    pass
 
 # ============================================================
 # 1. DATA ENTRY
@@ -134,7 +140,12 @@ ax2.set_ylim([-0.3, 0.3])
 
 plt.tight_layout()
 plt.savefig('regression_results.png', dpi=300, bbox_inches='tight')
-plt.show()
+print("Plot saved to 'regression_results.png'")
+try:
+    if sys.stdout.isatty():
+        plt.show()
+except Exception:
+    pass
 
 # ============================================================
 # 6. SUMMARY
